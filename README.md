@@ -1,317 +1,109 @@
-[README.md](https://github.com/user-attachments/files/31367805/README.md)
-# 🔌 Chatbot Tư vấn Khách hàng Điện lực Đà Nẵng
+# Electricity Customer Advisory Chatbot
 
-> Ứng dụng kỹ thuật **RAG (Retrieval-Augmented Generation)** để xây dựng hệ thống chatbot tư vấn khách hàng cho Điện lực Đà Nẵng — triển khai thực tế tại **[chatbotdienlucdanang.streamlit.app](https://chatbotdienlucdanang.streamlit.app)**
+A Vietnamese-language academic prototype that combines **document-grounded question answering** with **deterministic electricity calculations**.
 
----
+**Author:** Le Minh Dat · **Context:** Individual graduation project, University of Economics – The University of Danang. Proposed and developed during an internship in the Business Department at Da Nang Power Company.
 
-## 📌 Giới thiệu
+> This is a graduation-project prototype, not an official EVN customer service system. It is not connected to EVN customer accounts or production APIs.
 
-Đây là đồ án tốt nghiệp của sinh viên **Lê Minh Đạt** (MSSV: 221124029109, Lớp 48K29.1), Khoa Thương mại Điện tử, Đại học Kinh tế — Đại học Đà Nẵng.
+## Problem and scope
 
-**Giảng viên hướng dẫn:** TS. Nguyễn Phong Sơn
+Electricity customers need to navigate lengthy documents and understand billing or consumption estimates. This project explores a single interface for document lookup, electricity bill calculation, appliance consumption analysis and solar payback estimation.
 
-Hệ thống giải quyết 3 vấn đề thực tiễn của ngành điện lực:
-- Văn bản pháp lý dày đặc, khó tra cứu (QĐ 1279, TT 09/2023, NĐ 58/2025)
-- Các LLM phổ thông (ChatGPT, Gemini) không có dữ liệu ngành điện VN → dễ hallucination
-- Cổng EVNCSKH.vn thiếu công cụ hỏi đáp tự động và tính toán hỗ trợ
+The application is organized into five tabs:
 
----
+| Feature | Implemented behavior | Main files |
+| --- | --- | --- |
+| Document assistant | Retrieve document passages and generate answers with source references. | `tabs/chat.py`, `rag_pipeline.py` |
+| Electricity billing | Apply the configured tiered tariff and compare household-splitting scenarios. | `tabs/tien_dien.py`, `utils.py` |
+| Consumption analysis | Estimate electricity use from appliance inputs and display charts. | `tabs/tieu_thu.py` |
+| Solar estimates | Estimate output, self-consumption and payback using configured assumptions. | `tabs/solar.py`, `utils.py` |
+| Document management | Read uploaded PDFs and build or extend the FAISS index. | `tabs/docs.py`, `doc_pdf_smart.py`, `db_manager.py` |
 
-## ✨ Tính năng
+## My work
 
-| # | Tính năng | Mô tả |
-|:---:|---|---|
-| 01 | **Trợ lý Pháp lý** | Hỏi đáp dựa trên kho văn bản EVN, có trích dẫn nguồn từng điều khoản |
-| 02 | **Tính tiền điện** | Biểu giá bậc thang 6 mức theo QĐ 1279/QĐ-BCT, có so sánh tách hộ |
-| 03 | **Phân tích tiêu thụ** | Thư viện 9+ thiết bị, biểu đồ pie, benchmark hộ gia đình |
-| 04 | **Điện mặt trời** | Tính sản lượng & hoàn vốn theo PSH từng vùng (NĐ 58/2025) |
-| 05 | **Quản lý tài liệu** | Upload PDF mới → tự động chunking + embedding incremental |
+I proposed the topic, defined the scope and intended users, documented functions and processing flows, and implemented the web prototype. The repository includes PDF ingestion, vector retrieval, LLM integration, calculation utilities and automated tests. The project connects a customer-service problem with software functionality and traceable source material.
 
----
+## How it works
 
-## 🏗️ Kiến trúc hệ thống
+1. Read text PDFs with PyMuPDF; optionally use LlamaParse for scanned documents.
+2. Split documents into overlapping chunks and generate multilingual embeddings.
+3. Store vectors and metadata in FAISS.
+4. Route recognized bill-calculation questions to Python calculation functions.
+5. For other questions, retrieve and rank passages, assemble context and call the configured Groq LLM.
+6. Return the answer with source metadata through Streamlit.
 
-```
-Khách hàng
-     │
-     ▼
-┌─────────────────────────────────────────────┐
-│         TẦNG GIAO DIỆN — Streamlit          │
-│  Tab 1  │ Tab 2  │ Tab 3  │ Tab 4  │ Tab 5  │
-└─────────────────────────────────────────────┘
-     │
-     ▼
-┌─────────────────────────────────────────────┐
-│         TẦNG NGHIỆP VỤ — Python             │
-│  rag_pipeline.py  │  utils.py               │
-│  db_manager.py    │  doc_pdf_smart.py        │
-│  config.py                                  │
-└─────────────────────────────────────────────┘
-     │
-     ▼
-┌─────────────────────────────────────────────┐
-│           TẦNG DỮ LIỆU                      │
-│  FAISS Vector DB  │  Groq Cloud API          │
-│  Văn bản EVN PDF  │  LlamaParse OCR          │
-└─────────────────────────────────────────────┘
-```
+The retrieval score shown by the application is a distance-derived heuristic, not a calibrated probability that an answer is correct. Ranking is based on retrieval scores; the current implementation does not use a separate cross-encoder reranker.
 
----
+See [Architecture and flows](docs/architecture.md) and [Validation scope](docs/validation.md).
 
-## ⚙️ Pipeline RAG
+## Technology
 
-```
-Câu hỏi → Fast-path check
-              │
-              ├── Có số kWh + từ khóa tiền → Python tinh_tien_dien() → Kết quả (<50ms)
-              │
-              └── Không → RAG Pipeline
-                              │
-                         [Retrieval] Embedding → FAISS tìm top-15 chunks
-                              │
-                         [Re-ranking] Lọc conf ≥ 0.30, sort giảm dần, lấy top-5
-                              │
-                         [Confidence] conf = max(0, 1 − L²/2)
-                              │
-                         [Generation] LLaMA 3.1-8B (Groq) → Câu trả lời + Citations
-```
+Python · Streamlit · LangChain · FAISS · sentence-transformers · Groq API · PyMuPDF · LlamaParse · pandas · Plotly · pytest.
 
-### 🚀 Điểm sáng: Fast-path Intent Detection
+Model names, tariff values and retrieval settings are centralized in `config.py`. The code integrates a pretrained LLM; it does not train or fine-tune a foundation model.
 
-Phát hiện và giải quyết bug LLaMA 3.1-8B lặp vô tận khi tính tiền bậc thang. Thay vì đưa vào RAG, hệ thống phát hiện ý định tính tiền và chuyển sang hàm Python deterministic:
+## Run locally
 
-- **Điều kiện 1:** Câu hỏi chứa ≥ 1 từ khóa tiền tệ (`tiền`, `hết`, `bao nhiêu`, `hóa đơn`...)
-- **Điều kiện 2:** Regex bắt được số + đơn vị kWh (`250kWh`, `300 số điện`, `450 chữ`...)
-- **Kết quả:** `<50ms` thay vì `1–2s`, `14/14` test PASS, `0%` lặp vô tận
-
----
-
-## 📊 Kết quả thực nghiệm
-
-| Chỉ số | Kết quả |
-|---|:---:|
-| Độ chính xác RAG | **86,7%** (26/30 câu test) |
-| Unit test | **105/105 PASS (100%)** |
-| Sai lệch tính tiền điện | **0 đồng** |
-| Chi phí vận hành | **0 đồng/tháng** |
-| Thời gian phản hồi RAG | **1–2 giây** |
-| Thời gian phản hồi tính tiền | **<50 ms** |
-| Hoàn vốn ĐMT Đà Nẵng (4,8 kWp) | **5,0 năm** |
-
----
-
-## 🛠️ Tech Stack
-
-| Thành phần | Công nghệ |
-|---|---|
-| **Frontend** | Streamlit |
-| **Backend** | Python 3.10 |
-| **RAG Framework** | LangChain |
-| **Vector Database** | FAISS (IndexFlatL2) |
-| **Embedding Model** | `paraphrase-multilingual-MiniLM-L12-v2` (384 chiều) |
-| **LLM** | LLaMA 3.1-8B Instant via Groq Cloud (LPU) |
-| **PDF Parser** | PyMuPDF + LlamaParse OCR |
-| **Deploy** | Streamlit Community Cloud |
-
----
-
-## 📁 Cấu trúc dự án
-
-```
-DeAn/
-├── app.py                  # Entry point — khởi động Streamlit app
-├── config.py               # Tất cả tham số cấu hình (biểu giá, LLM, RAG...)
-├── rag_pipeline.py         # Pipeline RAG 4 giai đoạn + Fast-path
-├── utils.py                # Hàm tính toán thuần (tiền điện, ĐMT, tiêu thụ)
-├── db_manager.py           # Quản lý vòng đời FAISS DB (build/load/merge)
-├── doc_pdf_smart.py        # Định tuyến PDF: PyMuPDF vs LlamaParse OCR
-├── sidebar.py              # Sidebar UI
-├── ui_helpers.py           # Hàm render dùng chung
-├── tao_vector_db.py        # Script build vector DB từ tài liệu
-├── test_tinh_toan.py       # 105 unit tests (pytest)
-├── tabs/
-│   ├── chat.py             # Tab Trợ lý Pháp lý
-│   ├── tien_dien.py        # Tab Tính tiền điện
-│   ├── tieu_thu.py         # Tab Phân tích tiêu thụ
-│   ├── solar.py            # Tab Điện mặt trời
-│   └── docs.py             # Tab Quản lý tài liệu
-└── faiss_dienluc_db/
-    ├── index.faiss         # Vector database (~2.500 chunks)
-    └── index.pkl           # Metadata chunks
-```
-
----
-
-## 🚀 Cài đặt & Chạy local
-
-### 1. Clone repository
+Use a separate Python environment and run commands from the repository root. The existing requirements use broad version ranges; a fresh dependency installation has not been validated as part of this documentation update.
 
 ```bash
-git clone https://github.com/<your-username>/chatbot-dien-luc-da-nang.git
-cd chatbot-dien-luc-da-nang
+git clone https://github.com/bigbaboy/chatbot-dienluc-danang.git
+cd chatbot-dienluc-danang
+python -m venv .venv
 ```
 
-### 2. Cài đặt dependencies
+Activate the environment:
+
+```powershell
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+```
 
 ```bash
-pip install -r requirements.txt
+# macOS / Linux
+source .venv/bin/activate
 ```
-
-### 3. Cấu hình API keys
-
-Tạo file `.env` ở thư mục gốc:
-
-```env
-GROQ_API_KEY=your_groq_api_key_here
-LLAMA_CLOUD_API_KEY=your_llama_cloud_api_key_here
-```
-
-> **Lấy API key miễn phí:**
-> - Groq: [console.groq.com](https://console.groq.com)
-> - LlamaParse: [cloud.llamaindex.ai](https://cloud.llamaindex.ai)
-
-### 4. Chạy ứng dụng
 
 ```bash
-streamlit run app.py
+python -m pip install -r requirements.txt
 ```
 
-Truy cập: `http://localhost:8501`
+Copy `.env.example` to `.env` and provide your own `GROQ_API_KEY`. `LLAMA_CLOUD_API_KEY` is optional for OCR. Keep API keys out of version control.
 
----
-
-## ☁️ Deploy lên Streamlit Cloud
-
-1. Fork repository này lên GitHub
-2. Vào [share.streamlit.io](https://share.streamlit.io) → New app
-3. Chọn repo, branch `main`, entry point `app.py`
-4. Vào **Settings → Secrets**, thêm:
-
-```toml
-GROQ_API_KEY = "your_groq_api_key"
-LLAMA_CLOUD_API_KEY = "your_llama_cloud_api_key"
-```
-
-5. Click **Deploy** → Chờ ~2-3 phút
-
-> ⚠️ **Lưu ý:** Folder `faiss_dienluc_db/` phải được commit lên GitHub vì Streamlit Cloud dùng ephemeral filesystem — mỗi lần restart sẽ mất nếu không commit.
-
----
-
-## 🔑 Tham số cấu hình chính
-
-```python
-# Embedding
-EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
-
-# LLM
-LLM_MODEL        = "llama-3.1-8b-instant"
-LLM_TEMPERATURE  = 0.2
-LLM_MAX_TOKENS   = 800
-LLM_FREQUENCY_PENALTY = 0.6
-
-# Chunking
-CHUNK_SIZE    = 1200   # ký tự
-CHUNK_OVERLAP = 300    # ký tự
-
-# RAG Search
-SEARCH_FETCH_K = 15    # lấy 15 chunks ban đầu
-SEARCH_TOP_K   = 5     # giữ 5 chunks tốt nhất
-
-# Confidence thresholds
-CONFIDENCE_MIN_RELEVANCE = 0.30   # loại bỏ
-CONFIDENCE_MED           = 0.45   # badge vàng
-CONFIDENCE_HIGH          = 0.62   # badge xanh
-```
-
----
-
-## 📐 Công thức Confidence Score
-
-```
-confidence = max(0.0, min(1.0, 1.0 - L²/2))
-```
-
-Trong đó `L²` là khoảng cách L2 bình phương giữa vector câu hỏi và vector chunk. Vì vector được chuẩn hóa độ dài = 1, nên `L² ∈ [0, 2]` và công thức đưa điểm về thang `[0, 1]`.
-
----
-
-## ⚡ Biểu giá điện (QĐ 1279/QĐ-BCT, 09/05/2025)
-
-| Bậc | Khoảng (kWh) | Đơn giá (đ/kWh) |
-|:---:|---|---:|
-| 1 | 0 – 50 | 1.984 |
-| 2 | 51 – 100 | 2.050 |
-| 3 | 101 – 200 | 2.380 |
-| 4 | 201 – 300 | 2.998 |
-| 5 | 301 – 400 | 3.350 |
-| 6 | > 400 | 3.460 |
-
-**VAT: 8%**
-
----
-
-## ☀️ Peak Sun Hours (PSH) theo vùng
-
-| Vùng | PSH (giờ/ngày) |
-|---|:---:|
-| Hà Nội & Bắc Bộ | 3.8 |
-| **Đà Nẵng & Trung Bộ** | **4.8** |
-| TP.HCM & Nam Bộ | 5.2 |
-| Tây Nguyên | 5.1 |
-| Ninh Thuận – Bình Thuận | 5.8 |
-
----
-
-## 🧪 Chạy Unit Test
+To build an index from PDFs in `data/`:
 
 ```bash
-pytest test_tinh_toan.py -v
+python tao_vector_db.py
+python -m streamlit run app.py
 ```
 
-Kết quả: **105/105 PASS (100%)**
+The first embedding-model load may require a download. Only load FAISS metadata from trusted sources: the current loader enables pickle deserialization. Rebuilding from the supplied PDFs is preferable to loading an unfamiliar index.
 
----
+The existing project lists a [Streamlit demo](https://chatbotdienlucdanang.streamlit.app). Availability is not verified by this documentation update.
 
-## ⚠️ Hạn chế
+## Tests and evidence
 
-- Kho tài liệu chưa phủ hết nghiệp vụ đặc thù (điện 3 pha, biểu giá TOU)
-- LLaMA 8B độ trễ 1–2s — chưa thật sự real-time
-- Chưa có feedback loop từ người dùng
-- Chưa kết nối API thực của EVNCPC
-- Chưa xử lý prompt injection và rate limiting
+```bash
+python -m pip install pytest
+python -m pytest test_tinh_toan.py -v
+```
 
----
+Test code covers billing, VAT, household splitting, consumption, solar calculations, question parsing and validation helpers. Tests have not been executed for this documentation update, so no pass count, latency or accuracy figure is claimed here. LLM answer quality requires separate evaluation with reference answers and document versions.
 
-## 🔮 Hướng phát triển
+## Current limitations
 
-- [ ] Mở rộng kho tài liệu sang điện 3 pha, biểu giá TOU
-- [ ] Nâng cấp LLM lên LLaMA 70B / Gemini Flash
-- [ ] Áp dụng Hybrid Search (vector + BM25) + Re-ranker
-- [ ] Xây dựng feedback loop: log → phân tích → tinh chỉnh
-- [ ] Hỗ trợ tiếng Anh cho khách quốc tế
-- [ ] Tích hợp API thực của EVNCPC
+- Answers depend on the supplied documents and retrieval quality; generated answers can still be incorrect.
+- Tariffs and solar assumptions are configuration snapshots, not a live feed of current rules.
+- No production EVN integration, authenticated customer-account lookup or measured customer-service impact.
+- API availability, rate limits and model changes can affect behavior.
+- Dependency locking, repeatable evaluation and deployment hardening remain future work.
 
----
+## Next steps
 
-## 👤 Tác giả
+- [ ] Save a versioned question/reference-answer evaluation set.
+- [ ] Add reproducible test output and dependency versions.
+- [ ] Improve retrieval coverage and document-update tracking.
+- [ ] Add user feedback and review workflows.
 
-**Lê Minh Đạt**
-- MSSV: 221124029109
-- Lớp: 48K29.1
-- Khoa: Thương mại Điện tử
-- Trường: Đại học Kinh tế — Đại học Đà Nẵng
-- GVHD: TS. Nguyễn Phong Sơn
-
----
-
-## 📄 Giấy phép
-
-Dự án này được phát triển cho mục đích học thuật.
-
----
-
-<div align="center">
-  <strong>🌐 Demo trực tiếp: <a href="https://chatbotdienlucdanang.streamlit.app">chatbotdienlucdanang.streamlit.app</a></strong>
-</div>
+**Academic attribution:** Le Minh Dat, class 48K29.1; supervisor: Dr. Nguyen Phong Son, as recorded in the original project documentation.
